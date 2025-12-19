@@ -21,3 +21,5 @@ Thumbs.db
 # Project local data
 # -----------------------
 data/
+
+*.sqlite
