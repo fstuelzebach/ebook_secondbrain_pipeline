@@ -1,26 +1,30 @@
 import os
 import json
-import requests
 from pathlib import Path
+from typing import Optional, List
+
+import requests
 from dotenv import load_dotenv
-from datetime import datetime
-from tqdm import tqdm  # progress bars
+from tqdm import tqdm
+
 
 # -----------------------------
-# Paths & environment
+# Paths
 # -----------------------------
 ROOT = Path(__file__).resolve().parents[1]
 CLEAN_DIR = ROOT / "data" / "clean"
-LOG_DIR = ROOT / "data" / "log"
-LOG_DIR.mkdir(exist_ok=True)
 
-# Load environment variables
+if not CLEAN_DIR.exists():
+    raise RuntimeError("Clean directory not found")
+
+
+# -----------------------------
+# Environment
+# -----------------------------
 load_dotenv(ROOT / ".env")
+
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
-
-if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-    raise ValueError("Missing NOTION_API_KEY or NOTION_DATABASE_ID")
 
 HEADERS = {
     "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -28,118 +32,94 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# -----------------------------
-# Helper: chunk list into batches
-# -----------------------------
-def chunked(iterable, size):
-    for i in range(0, len(iterable), size):
-        yield iterable[i:i + size]
 
 # -----------------------------
-# Books to process
+# EXPLICIT JSON → NOTION MAPPING
 # -----------------------------
-BOOK_TITLES = [
-    "Hedge Fund Market Wizards",
-    # Add more book titles here
-]
+BOOK_TO_NOTION_MAP = {
+    "stock_market_wizards__jack_d_schwager.json":
+        "Stock Market Wizards",
+
+    "the_mental_game_of_trading__jared_tendler.json":
+        "The Mental Game of Trading",
+}
+
 
 # -----------------------------
-# Process each book
+# Notion helpers
 # -----------------------------
-for book_idx, title in enumerate(BOOK_TITLES, start=1):
-    try:
-        json_file = CLEAN_DIR / f"{title}.json"
-        if not json_file.exists():
-            print(f"⚠️ JSON not found for book: {title}")
-            continue
+def find_page_id(page_title: str) -> Optional[str]:
+    payload = {
+        "filter": {
+            "property": "Title",
+            "title": {"equals": page_title}
+        }
+    }
 
-        with open(json_file, "r", encoding="utf-8") as f:
-            book_data = json.load(f)
+    res = requests.post(
+        f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query",
+        headers=HEADERS,
+        json=payload,
+    )
+    res.raise_for_status()
 
-        # -----------------------------
-        # Find Notion page by title
-        # -----------------------------
-        query_url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-        query_payload = {"filter": {"property": "Title", "title": {"equals": title}}}
-        response = requests.post(query_url, headers=HEADERS, json=query_payload)
-        response.raise_for_status()
-        results = response.json().get("results", [])
+    results = res.json().get("results", [])
+    return results[0]["id"] if results else None
 
-        if not results:
-            print(f"⚠️ No Notion page found for: {title}")
-            continue
 
-        page = results[0]
-        page_id = page["id"]
-        print(f"\nFound Notion page: {page_id}")
+def append_blocks(page_id: str, blocks: List[dict]):
+    for i in range(0, len(blocks), 100):
+        batch = blocks[i:i + 100]
+        res = requests.patch(
+            f"https://api.notion.com/v1/blocks/{page_id}/children",
+            headers=HEADERS,
+            json={"children": batch},
+        )
+        res.raise_for_status()
 
-        # -----------------------------
-        # Fetch existing children
-        # -----------------------------
-        children_url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-        existing_blocks = requests.get(children_url, headers=HEADERS).json().get("results", [])
 
-        # Preserve the first block (cover), delete all others
-        top_block_id = existing_blocks[0]["id"] if existing_blocks else None
-        for block in existing_blocks[1:] if top_block_id else existing_blocks:
-            del_resp = requests.delete(f"https://api.notion.com/v1/blocks/{block['id']}", headers=HEADERS)
-            if not del_resp.ok:
-                print(f"⚠️ Failed to delete block {block['id']}: {del_resp.text}")
+# -----------------------------
+# Main loop
+# -----------------------------
+for json_name, notion_title in tqdm(BOOK_TO_NOTION_MAP.items(), desc="Books"):
+    json_path = CLEAN_DIR / json_name
+    if not json_path.exists():
+        print(f"❌ JSON not found: {json_name}")
+        continue
 
-        # -----------------------------
-        # Build new blocks
-        # -----------------------------
-        blocks = []
+    with open(json_path, "r", encoding="utf-8") as f:
+        book = json.load(f)
 
-        # 1️⃣ Insert Literaturverzeichnis at top (after cover)
+    page_id = find_page_id(notion_title)
+    if not page_id:
+        print(f"❌ Notion page not found: {notion_title}")
+        continue
+
+    blocks = []
+
+    for chapter in book.get("annotations", []):
         blocks.append({
             "object": "block",
-            "type": "table_of_contents",
-            "table_of_contents": {}
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {"content": chapter["chapter"]}}]
+            }
         })
 
-        # 2️⃣ Append chapters and annotations
-        for chapter in book_data.get("annotations", []):
-            heading_type = {1: "heading_1", 2: "heading_2", 3: "heading_3"}.get(
-                chapter.get("heading_level", 1), "heading_2"
-            )
+        for entry in chapter["entries"]:
+            text = entry["highlight"] or ""
+            if entry.get("note"):
+                text += f"\nNote: {entry['note']}"
 
-            # Chapter heading
             blocks.append({
                 "object": "block",
-                "type": heading_type,
-                heading_type: {
-                    "rich_text": [{"type": "text", "text": {"content": chapter.get("chapter", "Unknown Chapter")}}]
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": text}}]
                 }
             })
 
-            # Annotations
-            for entry in chapter.get("entries", []):
-                content = entry.get("highlight", "")
-                note = entry.get("note")
-                if note:
-                    content += f"\nNote: {note}"
-                if content.strip():
-                    blocks.append({
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {
-                            "rich_text": [{"type": "text", "text": {"content": content}}]
-                        }
-                    })
+    append_blocks(page_id, blocks)
+    print(f"✅ Updated Notion page: {notion_title}")
 
-        # -----------------------------
-        # Append blocks in batches (after cover)
-        # -----------------------------
-        print(f"Processing book {book_idx}/{len(BOOK_TITLES)}: {title}")
-        for batch in tqdm(list(chunked(blocks, 50)), desc=f"{title} blocks", unit="batch"):
-            append_resp = requests.patch(children_url, headers=HEADERS, json={"children": batch})
-            append_resp.raise_for_status()
-
-        print(f"✅ Completed {title} ({book_idx}/{len(BOOK_TITLES)})")
-
-    except Exception as e:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        print(f"❌ Error processing '{title}' at {timestamp}: {e}")
-        with open(LOG_DIR / f"error_log_{timestamp}.txt", "w") as log_file:
-            log_file.write(str(e))
+print("🎉 All done.")

@@ -6,7 +6,6 @@ import json
 from collections import defaultdict
 import shutil
 import sys
-from difflib import get_close_matches
 
 # -----------------------------
 # Project root & data directories
@@ -23,6 +22,24 @@ for p in (RAW_DATA_DIR, CLEAN_DIR, LOG_DIR):
 
 ERROR_LOG_FILE = LOG_DIR / f"error_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
+
+# -----------------------------
+# Focus list (ONLY these books)
+# -----------------------------
+FOCUS_BOOK_TITLES = [
+    "Hedge Fund Market Wizards",
+    "Quantitative Trading",
+    "Alpha Trader",
+    "The Mental Game of Trading: A System for Solving Problems With Greed, Fear, Anger, Confidence, and Discipline",
+    "The little Book of Trading",
+    "The Little Book of Common Sense Investing: The Only Way to Guarantee Your Fair Share of Stock Market Returns",
+    "Principles for Dealing With the Changing World Order : Why Nations Succeed and Fail (9781982164799)",
+    "The Psychology of Money: Timeless Lessons on Wealth, Greed, and Happiness",
+    "The Mental Strategies of Top Traders",
+    "Stock Market Wizards",
+    "Quantitative Trading"
+]
+
 # -----------------------------
 # Original iBooks DB paths
 # -----------------------------
@@ -36,81 +53,90 @@ else:
 BOOK_DB_PATH = RAW_DATA_DIR / ORIG_BOOK_DB_PATH.name
 ANNOT_DB_PATH = RAW_DATA_DIR / ORIG_ANNOT_DB_PATH.name
 
+
 # -----------------------------
-# Helper functions
+# Helpers
 # -----------------------------
 def log_error(msg: str):
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open(ERROR_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {msg}\n")
+        f.write(f"[{datetime.now()}] {msg}\n")
     print(f"ERROR: {msg}")
 
+
 def copy_if_newer(src: Path, dst: Path):
-    if not src.exists():
-        log_error(f"Source file not found: {src}")
-        return False
     if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
         shutil.copy2(src, dst)
-        print(f"Copied {src.name} → {dst}")
-    return True
 
-def cocoa_timestamp_to_datetime(cocoa_ts):
-    if cocoa_ts is None:
+
+def cocoa_timestamp_to_datetime(ts):
+    if ts is None:
         return None
-    return datetime(2001, 1, 1) + timedelta(seconds=cocoa_ts)
+    return datetime(2001, 1, 1) + timedelta(seconds=ts)
 
-def normalize_title(title: str) -> str:
-    return (
-        title.lower()
-        .strip()
-        .replace("–", "-")
-        .replace("—", "-")
-    )
 
-def normalize_chapter(chapter_name):
-    match = re.search(r'(\d+)', chapter_name or "")
-    if match:
-        return f"Chapter {int(match.group(1)):02d}"
-    return chapter_name or "Unknown Chapter"
+def normalize_string(value: str) -> str:
+    """
+    Strong normalization:
+    - lowercase
+    - remove punctuation
+    - collapse whitespace
+    """
+    if not value:
+        return ""
+    value = value.lower()
+    value = re.sub(r"\([^)]*\)", "", value)  # remove parentheses (ISBNs etc.)
+    value = re.sub(r"[^\w\s]", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
 
-def assign_heading_level(chapter_name: str) -> int:
-    match = re.search(r'(\d+(\.\d+)*)', chapter_name or "")
-    return min(match.group(1).count(".") + 1, 3) if match else 1
 
-def safe_filename(name: str) -> str:
-    return re.sub(r'[^\w\-_ ]', "_", name)
+def normalize_filename(value: str) -> str:
+    value = normalize_string(value)
+    value = re.sub(r"\s+", "_", value)
+    return value
 
-# -----------------------------
-# Step 0: Ensure raw DB is up-to-date
-# -----------------------------
-if not copy_if_newer(ORIG_BOOK_DB_PATH, BOOK_DB_PATH):
-    sys.exit(1)
-if not copy_if_newer(ORIG_ANNOT_DB_PATH, ANNOT_DB_PATH):
-    sys.exit(1)
 
 # -----------------------------
-# Step 1: Load books
+# Normalize focus titles once
+# -----------------------------
+FOCUS_TITLES_NORMALIZED = {
+    normalize_string(t) for t in FOCUS_BOOK_TITLES
+}
+
+
+# -----------------------------
+# Sync raw DBs
+# -----------------------------
+copy_if_newer(ORIG_BOOK_DB_PATH, BOOK_DB_PATH)
+copy_if_newer(ORIG_ANNOT_DB_PATH, ANNOT_DB_PATH)
+
+
+# -----------------------------
+# Load books
 # -----------------------------
 books = {}
-conn = sqlite3.connect(BOOK_DB_PATH)
-cursor = conn.cursor()
-cursor.execute("SELECT ZASSETID, ZTITLE, ZAUTHOR, ZPATH FROM ZBKLIBRARYASSET;")
 
-for asset_id, title, author, path in cursor.fetchall():
+conn = sqlite3.connect(BOOK_DB_PATH)
+cur = conn.cursor()
+cur.execute("SELECT ZASSETID, ZTITLE, ZAUTHOR FROM ZBKLIBRARYASSET;")
+
+for asset_id, title, author in cur.fetchall():
     books[asset_id] = {
-        "title": title,
-        "norm_title": normalize_title(title),
-        "author": author,
+        "title": title or "Unknown Title",
+        "author": author or "Unknown Author",
         "annotations": []
     }
+
 conn.close()
 
+
 # -----------------------------
-# Step 2: Load annotations
+# Load annotations
 # -----------------------------
 conn = sqlite3.connect(ANNOT_DB_PATH)
-cursor = conn.cursor()
-cursor.execute("""
+cur = conn.cursor()
+
+cur.execute("""
     SELECT 
         ZANNOTATIONASSETID,
         ZANNOTATIONSELECTEDTEXT,
@@ -118,122 +144,87 @@ cursor.execute("""
         ZANNOTATIONCREATIONDATE,
         ZANNOTATIONLOCATION
     FROM ZAEANNOTATION
-    WHERE ZANNOTATIONSELECTEDTEXT IS NOT NULL OR ZANNOTATIONNOTE IS NOT NULL;
 """)
 
-for asset_id, highlight, note, created, loc_text in cursor.fetchall():
-    if asset_id in books:
-        books[asset_id]["annotations"].append({
-            "highlight": highlight,
-            "note": note,
-            "created": cocoa_timestamp_to_datetime(created),
-            "loc_text": loc_text
-        })
+for asset_id, highlight, note, created, loc_text in cur.fetchall():
+    if asset_id not in books:
+        continue
+
+    books[asset_id]["annotations"].append({
+        "highlight": highlight,
+        "note": note,
+        "created": cocoa_timestamp_to_datetime(created),
+        "loc_text": loc_text
+    })
+
 conn.close()
 
-# -----------------------------
-# Step 3: Focus titles (AUTHORITATIVE SOURCE)
-# -----------------------------
-FOCUS_BOOK_TITLES = [
-    "Hedge Fund Market Wizards",
-    "Quantitative Trading",
-    "Alpha Trader",
-    "The Mental Game of Trading: A System for Solving Problems With Greed, Fear, Anger, Confidence, and Discipline",
-    "The little Book of Trading",
-    "The Little Book of Common Sense Investing: The Only Way to Guarantee Your Fair Share of Stock Market Returns",
-    "Principles for Dealing With the Changing World Order : Why Nations Succeed and Fail (9781982164799)",
-    "The Psychology of Money: Timeless Lessons on Wealth, Greed, and Happiness",
-    "The Mental Strategies of Top Traders",
-    "Stock Market Wizards",
-    "The Front Office",
-    "Inside the House of Money",
-    "Souverän Investieren mit Indexfonds & ETFs",
-    "Quantitative Trading"
-]
-
-normalized_focus = {normalize_title(t): t for t in FOCUS_BOOK_TITLES}
-library_titles = {b["norm_title"]: b for b in books.values()}
-
-matched = {}
-unmatched = []
 
 # -----------------------------
-# Step 4: Match focus → library
+# Export JSONs (FOCUSED ONLY)
 # -----------------------------
-for norm_focus, original_focus in normalized_focus.items():
-    if norm_focus in library_titles:
-        matched[original_focus] = library_titles[norm_focus]
-    else:
-        unmatched.append(original_focus)
+exported = 0
+skipped = 0
 
-# -----------------------------
-# Step 5: Export matched books
-# -----------------------------
-for focus_title, book in matched.items():
-    if not book["annotations"]:
-        log_error(f"No annotations found for book: {focus_title}")
+for book in books.values():
+    title = book["title"]
+    title_norm = normalize_string(title)
+
+    # 🔒 Focus filter
+    if title_norm not in FOCUS_TITLES_NORMALIZED:
+        skipped += 1
         continue
+
+    if not book["annotations"]:
+        log_error(f"No annotations found for focused book: {title}")
+        continue
+
+    author = book["author"]
+
+    title_fn = normalize_filename(title)
+    author_fn = normalize_filename(author)
+
+    filename = f"{title_fn}__{author_fn}.json"
+    out_path = CLEAN_DIR / filename
 
     chapter_map = defaultdict(list)
 
-    for annot in book["annotations"]:
+    for a in book["annotations"]:
         chapter = "Unknown Chapter"
-        loc = annot.get("loc_text")
-        if loc and "[" in loc and "]" in loc:
-            chapter = loc.split("[")[1].split("]")[0]
-        chapter = normalize_chapter(chapter)
+        if a["loc_text"] and "[" in a["loc_text"]:
+            chapter = a["loc_text"].split("[")[1].split("]")[0]
 
         chapter_map[chapter].append({
-            "highlight": annot["highlight"],
-            "note": annot["note"],
-            "created": annot["created"].isoformat() if annot["created"] else None
+            "highlight": a["highlight"],
+            "note": a["note"],
+            "created": a["created"].isoformat() if a["created"] else None
         })
 
-    book_json = {
-        "title": focus_title,
-        "author": book.get("author", ""),
+    json_data = {
+        "meta": {
+            "source_title": title,
+            "source_author": author,
+            "normalized_title": title_fn,
+            "normalized_author": author_fn
+        },
         "annotations": []
     }
 
     for chapter, entries in sorted(chapter_map.items()):
-        book_json["annotations"].append({
+        json_data["annotations"].append({
             "chapter": chapter,
-            "heading_level": assign_heading_level(chapter),
             "entries": sorted(entries, key=lambda x: x["created"] or "")
         })
 
-    out_file = CLEAN_DIR / f"{safe_filename(focus_title)}.json"
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(book_json, f, ensure_ascii=False, indent=2)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(json_data, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ JSON written: {out_file}")
+    print(f"✅ JSON written: {out_path.name}")
+    exported += 1
 
-# -----------------------------
-# Step 6: Fuzzy diagnostics (ONLY unmatched focus books)
-# -----------------------------
-print("\n📚 Focus-book diagnostics")
-print("────────────────────────")
 
-print(f"\n✅ Matched ({len(matched)}):")
-for t in matched:
-    print(f"  - {t}")
-
-print(f"\n❌ Unmatched focus books ({len(unmatched)}):")
-for title in unmatched:
-    norm = normalize_title(title)
-    suggestions = get_close_matches(
-        norm,
-        library_titles.keys(),
-        n=3,
-        cutoff=0.6
-    )
-    if suggestions:
-        print(f"  - {title}")
-        print(f"    ↳ possible matches:")
-        for s in suggestions:
-            print(f"       • {library_titles[s]['title']}")
-    else:
-        print(f"  - {title} (no close match found)")
-
-print("\nDone.")
-print(f"Error log: {ERROR_LOG_FILE}")
+print("\n──────── SUMMARY ────────")
+print(f"Focused titles      : {len(FOCUS_BOOK_TITLES)}")
+print(f"Exported JSONs      : {exported}")
+print(f"Skipped (not focus) : {skipped}")
+print(f"Error log           : {ERROR_LOG_FILE}")
