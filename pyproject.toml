@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "ibooks_notion_pipeline"
+name = "ebook_secondbrain_pipeline"
 version = "0.1.0"
 description = "Sync iBooks annotations to Notion"
 authors = ["fstuelzebach"]
