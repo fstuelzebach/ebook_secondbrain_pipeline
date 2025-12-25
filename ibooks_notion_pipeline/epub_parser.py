@@ -27,17 +27,10 @@ ERROR_LOG_FILE = LOG_DIR / f"error_log_{datetime.now().strftime('%Y%m%d_%H%M%S')
 # Focus list (ONLY these books)
 # -----------------------------
 FOCUS_BOOK_TITLES = [
-    "Hedge Fund Market Wizards",
-    "Quantitative Trading",
-    "Alpha Trader",
-    "The Mental Game of Trading: A System for Solving Problems With Greed, Fear, Anger, Confidence, and Discipline",
-    "The little Book of Trading",
-    "The Little Book of Common Sense Investing: The Only Way to Guarantee Your Fair Share of Stock Market Returns",
-    "Principles for Dealing With the Changing World Order : Why Nations Succeed and Fail (9781982164799)",
-    "The Psychology of Money: Timeless Lessons on Wealth, Greed, and Happiness",
-    "The Mental Strategies of Top Traders",
-    "Stock Market Wizards",
-    "Quantitative Trading"
+    #"The Mental Game of Trading: A System for Solving Problems With Greed, Fear, Anger, Confidence, and Discipline",
+    #"Stock Market Wizards",
+    "Atomic Habits: Tiny Changes, Remarkable Results",
+    "Deep Work"
 ]
 
 # -----------------------------
