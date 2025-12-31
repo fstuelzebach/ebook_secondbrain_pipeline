@@ -39,8 +39,11 @@ HEADERS = {
 # Explicit JSON → Notion mapping
 # -----------------------------
 BOOK_TO_NOTION_MAP = {
-    "stock_market_wizards__jack_d_schwager.json": "Stock Market Wizards",
-    "the_mental_game_of_trading_a_system_for_solving_problems_with_greed_fear_anger_confidence_and_discipline__jared_tendler.json": "The Mental Game of Trading",
+    "refuse_to_be_done__matt_bell.json": "Refuse to Be Done",
+    "how_to_take_smart_notes_one_simple_technique_to_boost_writing_learning_and_thinking_for_students_academics_and_nonfiction_book_writers__sönke_ahrens.json": "How to take Smart Notes",
+    "the_science_of_self_discipline__peter_hollins.json": "The Science of Self-Discipline",
+    "essentialism_the_disciplined_pursuit_of_less__mckeown_greg.json": "Essentialism",
+
 }
 
 # -----------------------------

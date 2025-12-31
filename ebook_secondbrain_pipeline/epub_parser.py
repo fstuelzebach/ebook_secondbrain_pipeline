@@ -29,8 +29,10 @@ ERROR_LOG_FILE = LOG_DIR / f"error_log_{datetime.now().strftime('%Y%m%d_%H%M%S')
 FOCUS_BOOK_TITLES = [
     #"The Mental Game of Trading: A System for Solving Problems With Greed, Fear, Anger, Confidence, and Discipline",
     #"Stock Market Wizards",
-    "Atomic Habits: Tiny Changes, Remarkable Results",
-    "Deep Work"
+    "Refuse to Be Done",
+    "The Science of Self-Discipline",
+    "Essentialism: The Disciplined Pursuit of Less",
+    "How to Take Smart Notes: One Simple Technique to Boost Writing, Learning and Thinking – for Students, Academics and Nonfiction Book Writers"
 ]
 
 # -----------------------------
